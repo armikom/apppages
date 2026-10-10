@@ -1,0 +1,215 @@
+---
+description: Architecture, conventions, and deployment guide for the AppPages project. Read this before making any changes.
+globs:
+alwaysApply: true
+---
+
+# AppPages — Agent Reference
+
+## What is AppPages?
+
+A multi-tenant web app for mobile publishers to generate and host public pages required by Google Play Console and App Store Connect: privacy policies, terms of use, support pages, account/data deletion pages, and marketing landing pages.
+
+**Live URL:** https://armikom-app-pages.web.app
+**GitHub:** https://github.com/armikom/apppages (public, `armikom` account)
+**Firebase project:** `armikom-app-pages` (owner: `devops@armikom.com`)
+**Firebase CLI login:** `devops@armikom.com`
+**Billing account:** `Gokcer Gokdal` (01B0A9-CAAA25-5C7E99) via `alarmsdk@gmail.com`
+
+## Tech Stack
+
+| Layer | Tech |
+|-------|------|
+| Monorepo | pnpm workspace (`packages/shared`, `functions`, `apps/dashboard`) |
+| Dashboard | React 19 + Vite + Tailwind CSS 3 + React Router 7 + React Hook Form + Zod |
+| Public pages | Cloud Functions v2 (Node 22) → server-rendered HTML, no JS required |
+| Auth | Firebase Auth — Google sign-in only (Apple disabled, can be re-enabled) |
+| Database | Cloud Firestore (eur3 region, native mode) |
+| Storage | Cloud Storage (for app icons — needs manual init in console) |
+| Shared | `@apppages/shared` — Zod schemas, TypeScript types, i18n (EN+TR), HTML templates |
+| Tests | Vitest + @firebase/rules-unit-testing |
+| CI/CD | GitHub Actions → Firebase deploy on push to `main` |
+
+## Project Structure
+
+```
+apppages/
+├── apps/dashboard/          # React SPA
+│   └── src/
+│       ├── components/      # DashboardLayout
+│       ├── hooks/           # useAuth, useApps, useRequests
+│       ├── lib/             # firebase.ts (init + emulator connect)
+│       └── pages/           # LoginPage, AppListPage, AppDetailPage, CreateAppPage, InboxPage, SettingsPage
+├── functions/               # Cloud Functions
+│   ├── src/
+│   │   ├── index.ts         # Entry — exports all functions
+│   │   ├── publicPages.ts   # GET /p/{slug}/* → server-rendered HTML
+│   │   ├── api.ts           # POST /api/request/{slug} → form submissions
+│   │   └── triggers/
+│   │       ├── onUserCreated.ts  # v1 auth trigger: create profile + account
+│   │       └── onAppWrite.ts    # v2 firestore trigger: slug reservation + versioning
+│   ├── esbuild.config.js    # Bundles dist/ → dist/bundle.js (inlines @apppages/shared)
+│   └── package.json         # main: ./dist/bundle.js — NO workspace: deps in prod
+├── packages/shared/         # Shared package
+│   └── src/
+│       ├── types/           # All TypeScript interfaces (AppData, UserProfile, etc.)
+│       ├── schemas/         # Zod validation schemas (appDataSchema, publicRequestSchema, slugSchema)
+│       ├── i18n/            # en.ts, tr.ts, index.ts — static string maps
+│       └── templates/       # HTML renderers (layout, privacy, terms, support, deletion, landing)
+├── tests/rules/             # Firestore security rules tests (vitest)
+├── scripts/seed.ts          # Emulator seed data (2 sample apps)
+├── firebase.json            # Hosting rewrites, function config, emulator ports
+├── firestore.rules          # Tenant-isolated security rules
+├── storage.rules            # Public read, auth+size-limited write
+├── firestore.indexes.json   # Composite indexes
+├── DECISIONS.md             # Architecture decision log (D001–D010)
+└── .github/workflows/ci.yml # CI/CD pipeline
+```
+
+## Data Model (Firestore)
+
+```
+users/{uid}                           → UserProfile (role, plan, defaultAccountId)
+accounts/{accountId}                  → Account (tenant)
+  /members/{uid}                      → AccountMember (role: owner|editor)
+  /apps/{appId}                       → AppData (the main entity — all app config)
+    /versions/{version}               → AppVersion (immutable publish snapshot)
+    /requests/{requestId}             → PublicRequest (deletion/support form submissions)
+  /publisherProfiles/{profileId}      → PublisherProfile (reusable across apps)
+slugs/{slug}                          → { accountId, appId } (global uniqueness map)
+abuseReports/{reportId}               → Admin-only
+```
+
+**Key rule:** Personal account ID === user's Firebase Auth UID. Team accounts (future) will use generated IDs.
+
+## URL Map
+
+### Dashboard (SPA routes — Firebase Hosting → index.html)
+- `/login` — Google sign-in
+- `/` — App list
+- `/apps/new` — Create app wizard (7 steps)
+- `/apps/:appId` — App detail + store links panel
+- `/apps/:appId/inbox` — Manage deletion/support requests
+- `/settings` — Profile, delete account
+
+### Public Pages (Firebase Hosting rewrite → `publicPages` Cloud Function)
+- `/p/{slug}` — Landing page with store badges
+- `/p/{slug}/privacy` — Generated privacy policy
+- `/p/{slug}/terms` — Terms of use / EULA
+- `/p/{slug}/support` — Support page + optional contact form
+- `/p/{slug}/delete-account` — Account deletion page + web form
+- `/p/{slug}/delete-data` — Data deletion page (optional per app)
+- `/p/{slug}/privacy/history` — Version history
+- Language: `?lang=tr` or `/p/{slug}/tr/privacy`
+
+### API (Firebase Hosting rewrite → `api` Cloud Function)
+- `POST /api/request/{slug}` — Form submission (deletion/support)
+
+## Cloud Functions (4 deployed)
+
+| Function | Gen | Trigger | Region |
+|----------|-----|---------|--------|
+| `publicPages` | v2 | HTTP (onRequest) | us-central1 |
+| `api` | v2 | HTTP (onRequest) | us-central1 |
+| `onAppWrite` | v2 | Firestore onDocumentWritten | us-central1 |
+| `onUserCreated` | v1 | Auth onCreate | us-central1 |
+
+## Build & Deploy
+
+### Local dev
+```bash
+pnpm install
+pnpm build:shared          # must build first — functions & dashboard depend on it
+pnpm dev                   # starts emulators + vite dev server
+pnpm seed                  # seed emulator with 2 sample apps (emulators must be running)
+```
+
+### Build pipeline
+```bash
+pnpm build:shared                        # 1. shared types + schemas + templates
+pnpm --filter @apppages/functions build  # 2. tsc → esbuild bundle (inlines shared)
+pnpm --filter @apppages/dashboard build  # 3. tsc → vite build
+```
+
+### Deploy (manual)
+```bash
+npx firebase deploy --project armikom-app-pages         # deploy all
+npx firebase deploy --only hosting --project armikom-app-pages
+npx firebase deploy --only functions --project armikom-app-pages
+npx firebase deploy --only firestore --project armikom-app-pages
+```
+
+**Important:** Use `npx firebase` (v13 from devDeps), NOT the global `firebase` (v15) — the global v15 crashes with SIGKILL 137 on this machine (Node 26 incompatibility).
+
+### Auto-deploy
+Push to `main` → GitHub Actions runs build + test + deploy.
+Service account: `github-actions@armikom-app-pages.iam.gserviceaccount.com`
+All secrets are set in the GitHub repo (FIREBASE_SERVICE_ACCOUNT, FIREBASE_API_KEY, etc.).
+
+## Critical Patterns
+
+### Functions: Lazy Firestore init
+All Cloud Functions use lazy `getFirestore()` to avoid calling it before `initializeApp()`:
+```typescript
+let _db: Firestore;
+function db() { return _db ??= getFirestore(); }
+```
+**Never** use `const db = getFirestore()` at module scope — the esbuild bundle inlines everything into one file, and top-level calls run before `initializeApp()`.
+
+### Functions: Bundling for deploy
+The `@apppages/shared` workspace package cannot be deployed as-is (Firebase doesn't understand `workspace:*`). The build pipeline:
+1. `tsc` compiles TS → JS in `dist/`
+2. `esbuild.config.js` bundles `dist/index.js` → `dist/bundle.js`, inlining `@apppages/shared` via an alias
+3. `package.json` points `main` to `./dist/bundle.js`
+4. `@apppages/shared` is a devDependency only — not in production `dependencies`
+
+### Slug uniqueness
+Enforced via Firestore transaction: check `slugs/{slug}` doesn't exist → create it + create the app doc atomically. The `onAppWrite` trigger also manages slug docs as a safety net.
+
+### Public pages: CDN caching
+Response headers: `Cache-Control: public, max-age=300, s-maxage=3600`. Publishing a new version creates an immutable snapshot but doesn't actively bust the CDN — pages refresh within 5 min (client) or 1 hour (CDN).
+
+### Security rules: Tenant isolation
+- Users can only access `accounts/{accountId}` where they have a `members/{uid}` doc
+- Public pages never read Firestore directly — only via Admin SDK in Cloud Functions
+- Requests (deletion/support) can only be created via Cloud Functions, never client-side
+- Admin role checked via custom claim `request.auth.token.role == 'admin'`
+
+## Environment
+
+### Dashboard env vars (apps/dashboard/.env.local)
+```
+VITE_FIREBASE_API_KEY=AIzaSyAto0vCkQNIXCrxQSisWBWq1NkREK300JU
+VITE_FIREBASE_AUTH_DOMAIN=armikom-app-pages.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=armikom-app-pages
+VITE_FIREBASE_STORAGE_BUCKET=armikom-app-pages.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=772058686945
+VITE_FIREBASE_APP_ID=1:772058686945:web:c14cab860a4d2cdc5e9ea0
+VITE_USE_EMULATORS=false  # set to true for local dev
+```
+
+### Firebase Emulator Ports
+| Service | Port |
+|---------|------|
+| Auth | 9099 |
+| Firestore | 8080 |
+| Functions | 5001 |
+| Hosting | 5000 |
+| Storage | 9199 |
+| Emulator UI | 4000 |
+
+## Known Issues / TODOs
+
+- **Firebase Storage** not initialized — needs manual "Get Started" click in Firebase Console → Storage, then `npx firebase deploy --only storage`
+- **Apple sign-in** disabled (code removed from LoginPage) — re-enable when Apple Services ID is configured
+- **Email confirmation** for deletion/support requests: the confirmation URL is logged to console but no email is actually sent. Need Trigger Email extension or SMTP integration
+- **App Check / reCAPTCHA** not wired — honeypot + rate limiter provide basic bot protection
+- **Global firebase CLI (v15)** crashes with SIGKILL 137 — always use `npx firebase` (v13 from devDeps)
+- **Chunk size warning** in dashboard build (~907KB) — can be fixed with code-splitting via dynamic imports
+
+## Out of Scope for v1
+- Payments / billing (plan field exists, no Stripe integration)
+- Custom domains per app
+- Team invitations / multi-member accounts
+- Languages beyond EN and TR
+- Playwright e2e tests (directory exists, no tests written yet)
