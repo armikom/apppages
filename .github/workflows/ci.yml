@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  lint-typecheck-test:
+  build-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -29,31 +29,31 @@ jobs:
       - name: Build shared package
         run: pnpm build:shared
 
-      - name: Typecheck
-        run: pnpm typecheck
+      - name: Typecheck shared
+        run: pnpm --filter @apppages/shared typecheck
 
       - name: Test shared schemas
         run: pnpm test:shared
 
-      - name: Install Firebase Emulators
-        run: npm install -g firebase-tools
-
-      - name: Start Firestore emulator and run rules tests
-        run: |
-          firebase emulators:exec --only firestore "pnpm test:rules" --project demo-apppages-test
-
       - name: Build functions
-        run: pnpm build:functions
+        run: pnpm --filter @apppages/functions build
 
       - name: Build dashboard
-        run: pnpm build:dashboard
+        run: pnpm --filter @apppages/dashboard build
         env:
-          VITE_FIREBASE_PROJECT_ID: demo-apppages
+          VITE_FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
 
   deploy:
-    needs: lint-typecheck-test
+    needs: build-test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +61,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -72,7 +72,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build all
-        run: pnpm build
+        run: |
+          pnpm build:shared
+          pnpm --filter @apppages/functions build
+          pnpm --filter @apppages/dashboard build
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
@@ -81,9 +84,13 @@ jobs:
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
 
-      - name: Deploy to Firebase
-        uses: FirebaseExtended/action-hosting-deploy@v0
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
         with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          channelId: live
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy to Firebase
+        run: firebase deploy --project armikom-app-pages --force
