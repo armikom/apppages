@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: check if user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Helper: check if user is admin
+    function isAdmin() {
+      return isAuth() && request.auth.token.role == 'admin';
+    }
+
+    // Helper: check if user is a member of the account
+    function isAccountMember(accountId) {
+      return isAuth() && exists(/databases/$(database)/documents/accounts/$(accountId)/members/$(request.auth.uid));
+    }
+
+    // Helper: check if user is owner of the account
+    function isAccountOwner(accountId) {
+      return isAuth() && get(/databases/$(database)/documents/accounts/$(accountId)/members/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    // Slug reservation (global uniqueness)
+    match /slugs/{slug} {
+      allow read: if isAuth();
+      allow write: if false; // Only via Cloud Functions (transactions)
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuth() && request.auth.uid == userId;
+      allow update: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAuth() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // Accounts
+    match /accounts/{accountId} {
+      allow read: if isAccountMember(accountId) || isAdmin();
+      allow create: if false; // Only via Cloud Functions
+      allow update: if isAccountOwner(accountId) || isAdmin();
+      allow delete: if false; // Only via Cloud Functions (cascading delete)
+
+      // Account members
+      match /members/{memberId} {
+        allow read: if isAccountMember(accountId) || isAdmin();
+        allow write: if isAccountOwner(accountId) || isAdmin();
+      }
+
+      // Apps
+      match /apps/{appId} {
+        allow read: if isAccountMember(accountId) || isAdmin();
+        allow create: if isAccountMember(accountId);
+        allow update: if isAccountMember(accountId);
+        allow delete: if isAccountOwner(accountId) || isAdmin();
+
+        // App versions (immutable snapshots)
+        match /versions/{versionId} {
+          allow read: if isAccountMember(accountId) || isAdmin();
+          allow write: if false; // Only via Cloud Functions (publish)
+        }
+
+        // Requests (deletion, support)
+        match /requests/{requestId} {
+          allow read: if isAccountMember(accountId) || isAdmin();
+          allow update: if isAccountMember(accountId); // status changes
+          allow delete: if false; // Only via Cloud Functions
+          allow create: if false; // Only via Cloud Functions (public form)
+        }
+      }
+    }
+
+    // Publisher profiles (reusable across apps)
+    match /accounts/{accountId}/publisherProfiles/{profileId} {
+      allow read: if isAccountMember(accountId) || isAdmin();
+      allow create: if isAccountMember(accountId);
+      allow update: if isAccountMember(accountId);
+      allow delete: if isAccountOwner(accountId);
+    }
+
+    // Admin: abuse reports
+    match /abuseReports/{reportId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Catch-all deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

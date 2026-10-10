@@ -1,0 +1,18 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // App assets (icons, screenshots)
+    match /accounts/{accountId}/apps/{appId}/{allPaths=**} {
+      allow read: if true; // Public (used in rendered pages)
+      allow write: if request.auth != null
+        && firestore.exists(/databases/(default)/documents/accounts/$(accountId)/members/$(request.auth.uid))
+        && request.resource.size < 5 * 1024 * 1024 // 5MB max
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Catch-all deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

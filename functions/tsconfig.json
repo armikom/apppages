@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "paths": {
+      "@apppages/shared": ["../packages/shared/dist/index.d.ts"]
+    }
+  },
+  "include": ["src"]
+}

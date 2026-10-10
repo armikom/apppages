@@ -1,0 +1,36 @@
+{
+  "name": "apppages",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-tenant app page hosting for mobile publishers",
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:shared": "pnpm --filter @apppages/shared build",
+    "build:functions": "pnpm build:shared && pnpm --filter @apppages/functions build",
+    "build:dashboard": "pnpm build:shared && pnpm --filter @apppages/dashboard build",
+    "dev": "pnpm build:shared && concurrently \"pnpm --filter @apppages/dashboard dev\" \"pnpm emulators\"",
+    "dev:dashboard": "pnpm --filter @apppages/dashboard dev",
+    "emulators": "firebase emulators:start --import=./seed-data --export-on-exit=./seed-data",
+    "emulators:fresh": "firebase emulators:start",
+    "seed": "tsx scripts/seed.ts",
+    "test": "pnpm build:shared && pnpm test:rules && pnpm test:shared && pnpm test:functions",
+    "test:rules": "vitest run --config tests/rules/vitest.config.ts",
+    "test:shared": "pnpm --filter @apppages/shared test",
+    "test:functions": "pnpm --filter @apppages/functions test",
+    "test:e2e": "playwright test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "concurrently": "^9.1.2",
+    "firebase-tools": "^13.29.1",
+    "tsx": "^4.19.4",
+    "typescript": "^5.7.3",
+    "vitest": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@12.3.4"
+}
