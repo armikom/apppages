@@ -2,7 +2,7 @@ import { Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 
 export function LoginPage() {
-  const { user, loading, signInWithGoogle, signInWithApple } = useAuth();
+  const { user, loading, signInWithGoogle } = useAuth();
 
   if (loading) {
     return (
@@ -38,15 +38,7 @@ export function LoginPage() {
             Sign in with Google
           </button>
 
-          <button
-            onClick={signInWithApple}
-            className="flex items-center justify-center gap-3 w-full px-4 py-3 bg-black text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
-          >
-            <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C4.24 16.7 4.89 10.5 8.7 10.29c1.28.07 2.17.74 2.92.79 1.11-.23 2.18-.89 3.38-.8 1.42.11 2.5.66 3.2 1.67-2.93 1.75-2.23 5.59.52 6.66-.63 1.64-1.44 3.25-2.67 4.67zM12.07 10.2c-.16-2.35 1.84-4.38 4.04-4.57.29 2.63-2.39 4.63-4.04 4.57z" />
-            </svg>
-            Sign in with Apple
-          </button>
+          {/* Apple sign-in — enable later when Apple Services ID is configured */}
         </div>
 
         <p className="text-xs text-center text-gray-400 mt-8">

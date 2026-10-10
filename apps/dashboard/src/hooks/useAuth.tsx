@@ -6,7 +6,6 @@ import {
   signInWithRedirect,
   getRedirectResult,
   GoogleAuthProvider,
-  OAuthProvider,
   signOut as firebaseSignOut,
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
@@ -18,16 +17,12 @@ interface AuthState {
   profile: UserProfile | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
-  signInWithApple: () => Promise<void>;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
 
 const googleProvider = new GoogleAuthProvider();
-const appleProvider = new OAuthProvider("apple.com");
-appleProvider.addScope("email");
-appleProvider.addScope("name");
 
 function isMobileSafari(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -75,28 +70,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const signInWithApple = useCallback(async () => {
-    try {
-      if (isMobileSafari()) {
-        await signInWithRedirect(auth, appleProvider);
-      } else {
-        await signInWithPopup(auth, appleProvider);
-      }
-    } catch (error: any) {
-      if (error.code === "auth/popup-blocked") {
-        await signInWithRedirect(auth, appleProvider);
-      } else {
-        throw error;
-      }
-    }
-  }, []);
-
   const signOut = useCallback(async () => {
     await firebaseSignOut(auth);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signInWithGoogle, signInWithApple, signOut }}>
+    <AuthContext.Provider value={{ user, profile, loading, signInWithGoogle, signOut }}>
       {children}
     </AuthContext.Provider>
   );
