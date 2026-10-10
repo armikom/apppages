@@ -6,6 +6,8 @@ alwaysApply: true
 
 # AppPages — Agent Reference
 
+> **Full architecture doc:** `docs/ARCHITECTURE.md` — comprehensive reference with data model, URL routing, security model, build pipeline, i18n, CI/CD, and future work. Read it for deep context; this file is a quick-reference summary.
+
 ## What is AppPages?
 
 A multi-tenant web app for mobile publishers to generate and host public pages required by Google Play Console and App Store Connect: privacy policies, terms of use, support pages, account/data deletion pages, and marketing landing pages.
