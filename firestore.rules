@@ -81,8 +81,9 @@ service cloud.firestore {
     }
 
     // API keys (MCP / programmatic access)
-    // Read: account owners can list their own keys; Admin can see all
-    // Create: account owners only; Delete/Update: admin only
+    // Read/Create: account owners + admin
+    // Update (revoke): account owners can set active=false; admin can do anything
+    // Delete: admin only
     // Full key is never stored — only a SHA-256 hash (as the doc ID)
     match /apiKeys/{keyHash} {
       allow read: if isAuth() && (
@@ -96,7 +97,11 @@ service cloud.firestore {
          isAccountOwner(request.resource.data.accountId) &&
          request.resource.data.uid == request.auth.uid)
       );
-      allow update: if isAdmin();
+      allow update: if isAuth() && (
+        isAdmin() ||
+        (resource.data.accountId is string &&
+         isAccountOwner(resource.data.accountId))
+      );
       allow delete: if isAdmin();
     }
 
