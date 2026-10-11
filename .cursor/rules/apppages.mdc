@@ -64,6 +64,8 @@ apppages/
 ├── firestore.rules          # Tenant-isolated security rules
 ├── storage.rules            # Public read, auth+size-limited write
 ├── firestore.indexes.json   # Composite indexes
+├── packages/mcp/            # MCP server (stdio transport, @modelcontextprotocol/sdk)
+│   └── src/index.ts         # Tools: list_apps, get_app, create_app, update_app, publish_app, delete_app, list_requests, update_request, get_public_urls, get_store_links
 ├── DECISIONS.md             # Architecture decision log (D001–D010)
 └── .github/workflows/ci.yml # CI/CD pipeline
 ```
@@ -208,6 +210,25 @@ VITE_USE_EMULATORS=false  # set to true for local dev
 - **App Check / reCAPTCHA** not wired — honeypot + rate limiter provide basic bot protection
 - **Global firebase CLI (v15)** crashes with SIGKILL 137 — always use `npx firebase` (v13 from devDeps)
 - **Chunk size warning** in dashboard build (~907KB) — can be fixed with code-splitting via dynamic imports
+
+## MCP Server (`packages/mcp`)
+
+AI agents can manage AppPages via the MCP server (stdio transport). Tools: `list_apps`, `get_app`, `create_app`, `update_app`, `publish_app`, `delete_app`, `list_requests`, `update_request`, `get_public_urls`, `get_store_links`.
+
+```json
+// ~/.cursor/mcp.json
+{
+  "apppages": {
+    "type": "stdio",
+    "command": "node",
+    "args": ["/Users/devops/Documents/source/Armikom/apppages/packages/mcp/dist/index.js"],
+    "env": { "FIREBASE_PROJECT_ID": "armikom-app-pages" }
+  }
+}
+```
+
+Build: `pnpm --filter @apppages/mcp build`
+Auth: Uses ADC (`gcloud auth application-default login`) or `GOOGLE_APPLICATION_CREDENTIALS`.
 
 ## Out of Scope for v1
 - Payments / billing (plan field exists, no Stripe integration)

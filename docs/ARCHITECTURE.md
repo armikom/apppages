@@ -439,7 +439,58 @@ npx firebase deploy --project armikom-app-pages
 
 ---
 
-## 12. Future Work (Out of Scope for v1)
+## 12. MCP Server (`packages/mcp`)
+
+An MCP (Model Context Protocol) server enables AI agents to programmatically manage AppPages via stdio transport.
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_apps` | List all apps in the account |
+| `get_app` | Get full app details (publisher, platforms, data practices, etc.) |
+| `create_app` | Create a new draft app with slug reservation (transactional) |
+| `update_app` | Partial update of app fields |
+| `publish_app` | Publish an app (triggers version snapshot via onAppWrite) |
+| `delete_app` | Delete app and release slug |
+| `list_requests` | List deletion/support requests (with optional status filter) |
+| `update_request` | Update request status (new → in_progress → done/rejected) |
+| `get_public_urls` | Get all public page URLs for an app |
+| `get_store_links` | Get copy-paste URLs for App Store Connect / Google Play Console |
+
+### Configuration
+
+```json
+// ~/.cursor/mcp.json
+{
+  "apppages": {
+    "type": "stdio",
+    "command": "node",
+    "args": ["/path/to/apppages/packages/mcp/dist/index.js"],
+    "env": {
+      "FIREBASE_PROJECT_ID": "armikom-app-pages",
+      "APPPAGES_ACCOUNT_ID": "<optional-default-account-id>",
+      "APPPAGES_BASE_URL": "https://armikom-app-pages.web.app"
+    }
+  }
+}
+```
+
+### Auth
+
+The MCP server uses Firebase Admin SDK. It authenticates via:
+1. `GOOGLE_APPLICATION_CREDENTIALS` env var (path to service account JSON), or
+2. Application Default Credentials (ADC) — works when `gcloud auth application-default login` is active
+
+### Build
+
+```bash
+pnpm --filter @apppages/mcp build   # tsc → dist/index.js
+```
+
+---
+
+## 13. Future Work (Out of Scope for v1)
 
 | Feature | Status | Notes |
 |---------|--------|-------|

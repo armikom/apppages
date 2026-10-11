@@ -8,6 +8,7 @@
     "build:shared": "pnpm --filter @apppages/shared build",
     "build:functions": "pnpm build:shared && pnpm --filter @apppages/functions build",
     "build:dashboard": "pnpm build:shared && pnpm --filter @apppages/dashboard build",
+    "build:mcp": "pnpm --filter @apppages/mcp build",
     "dev": "pnpm build:shared && concurrently \"pnpm --filter @apppages/dashboard dev\" \"pnpm emulators\"",
     "dev:dashboard": "pnpm --filter @apppages/dashboard dev",
     "emulators": "firebase emulators:start --import=./seed-data --export-on-exit=./seed-data",
