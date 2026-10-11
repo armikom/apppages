@@ -69,17 +69,14 @@ export function SettingsPage() {
     try {
       const q = query(
         collection(db, "apiKeys"),
-        where("accountId", "==", accountId)
+        where("accountId", "==", accountId),
+        where("active", "==", true)
       );
       const snap = await getDocs(q);
       const loaded = snap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       })) as ApiKeyDoc[];
-      loaded.sort((a, b) => {
-        if (a.active !== b.active) return a.active ? -1 : 1;
-        return 0;
-      });
       setKeys(loaded);
     } catch (e) {
       console.error("Failed to load API keys:", e);
@@ -331,7 +328,7 @@ export function SettingsPage() {
             {keys.map((k) => (
               <div
                 key={k.id}
-                className={`py-3 flex items-center justify-between gap-4 ${!k.active ? "opacity-50" : ""}`}
+                className="py-3 flex items-center justify-between gap-4"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
@@ -341,15 +338,9 @@ export function SettingsPage() {
                     <span className="text-sm font-medium text-gray-900 truncate">
                       {k.label}
                     </span>
-                    {k.active ? (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
                         Active
                       </span>
-                    ) : (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
-                        Revoked
-                      </span>
-                    )}
                   </div>
                   <div className="text-xs text-gray-400 mt-1">
                     Created: {formatDate(k.createdAt)}
@@ -358,15 +349,13 @@ export function SettingsPage() {
                     )}
                   </div>
                 </div>
-                {k.active && (
-                  <button
+                <button
                     onClick={() => handleRevoke(k.id, k.label)}
                     disabled={revokingId === k.id}
                     className="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 disabled:opacity-50 whitespace-nowrap"
                   >
                     {revokingId === k.id ? "Revoking..." : "Revoke"}
                   </button>
-                )}
               </div>
             ))}
           </div>

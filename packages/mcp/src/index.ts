@@ -49,42 +49,50 @@ function generateApiKey(): string {
   return API_KEY_PREFIX + randomBytes(24).toString("hex");
 }
 
-interface ResolvedAuth {
-  accountId: string;
-  keyHash?: string;
-}
-
-let cachedAuth: ResolvedAuth | null = null;
-
-async function authenticateApiKey(apiKey: string): Promise<ResolvedAuth> {
-  const keyHash = hashKey(apiKey);
-  const doc = await db.doc(`${API_KEY_COLLECTION}/${keyHash}`).get();
-
-  if (!doc.exists) {
-    throw new Error("Invalid API key.");
-  }
-
-  const data = doc.data()!;
-  if (!data.active) {
-    throw new Error("API key has been revoked.");
-  }
-
-  // Update lastUsedAt (fire-and-forget)
-  doc.ref.update({ lastUsedAt: FieldValue.serverTimestamp() }).catch(() => {});
-
-  return { accountId: data.accountId, keyHash };
-}
-
-// Resolve auth on startup if API key is provided
 const envApiKey = process.env.APPPAGES_API_KEY;
 const envAccountId = process.env.APPPAGES_ACCOUNT_ID || "";
 
+/**
+ * Validate an API key against Firestore. Called on every tool invocation
+ * so that revoked keys are caught immediately.
+ *
+ * Returns the accountId bound to the key.
+ * Throws a descriptive error if the key is missing, invalid, or revoked.
+ */
+async function validateApiKey(apiKey: string): Promise<string> {
+  const keyHash = hashKey(apiKey);
+  const snap = await db.doc(`${API_KEY_COLLECTION}/${keyHash}`).get();
+
+  if (!snap.exists) {
+    throw new Error(
+      "Authentication failed: API key is invalid. " +
+      "Please check your APPPAGES_API_KEY value or create a new key in Settings → API Keys."
+    );
+  }
+
+  const data = snap.data()!;
+  if (!data.active) {
+    throw new Error(
+      `Authentication failed: API key "${data.prefix}" (${data.label}) has been revoked. ` +
+      "Please create a new key in Settings → API Keys and update your APPPAGES_API_KEY."
+    );
+  }
+
+  // Update lastUsedAt (fire-and-forget)
+  snap.ref.update({ lastUsedAt: FieldValue.serverTimestamp() }).catch(() => {});
+
+  return data.accountId;
+}
+
+// Quick startup check — log a warning early if the key is bad, but don't cache
 if (envApiKey) {
   try {
-    cachedAuth = await authenticateApiKey(envApiKey);
+    await validateApiKey(envApiKey);
   } catch (err: any) {
-    console.error(`[apppages-mcp] API key auth failed: ${err.message}`);
-    console.error("[apppages-mcp] Falling back to APPPAGES_ACCOUNT_ID if set.");
+    console.error(`[apppages-mcp] ${err.message}`);
+    if (envAccountId) {
+      console.error("[apppages-mcp] Falling back to APPPAGES_ACCOUNT_ID.");
+    }
   }
 }
 
@@ -100,10 +108,22 @@ const server = new McpServer({
 
 // ─── Helper functions ───
 
+/**
+ * Resolve the target account ID. On every call:
+ * 1. Explicit accountId parameter takes priority.
+ * 2. If APPPAGES_API_KEY is set, validate it against Firestore (catches revoked keys).
+ * 3. Fall back to APPPAGES_ACCOUNT_ID env var.
+ */
 async function resolveAccountId(accountId?: string): Promise<string> {
   if (accountId) return accountId;
-  if (cachedAuth?.accountId) return cachedAuth.accountId;
+
+  if (envApiKey) {
+    // Validate the key on every call — catches revoked keys immediately
+    return await validateApiKey(envApiKey);
+  }
+
   if (envAccountId) return envAccountId;
+
   throw new Error(
     "accountId is required. Authenticate with APPPAGES_API_KEY, set APPPAGES_ACCOUNT_ID, or pass accountId parameter."
   );

@@ -10,7 +10,10 @@ import {
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../lib/firebase";
+import { createLogger, setLoggerUserContext } from "../lib/logger";
 import type { UserProfile } from "@apppages/shared";
+
+const log = createLogger("auth");
 
 interface AuthState {
   user: User | null;
@@ -35,43 +38,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    log.info("Setting up auth state listener");
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       if (firebaseUser) {
-        const profileDoc = await getDoc(doc(db, "users", firebaseUser.uid));
-        if (profileDoc.exists()) {
-          setProfile(profileDoc.data() as UserProfile);
+        log.info("User authenticated", {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email ?? undefined,
+          provider: firebaseUser.providerData[0]?.providerId,
+        });
+        setLoggerUserContext(firebaseUser.uid);
+        try {
+          const profileDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          if (profileDoc.exists()) {
+            const profileData = profileDoc.data() as UserProfile;
+            setProfile(profileData);
+            setLoggerUserContext(firebaseUser.uid, profileData.defaultAccountId);
+            log.info("User profile loaded", {
+              accountId: profileData.defaultAccountId,
+              plan: profileData.plan,
+              role: profileData.role,
+            });
+          } else {
+            log.warn("User profile doc not found — may be pending creation by trigger", {
+              uid: firebaseUser.uid,
+            });
+          }
+        } catch (err) {
+          log.error("Failed to load user profile", err, { uid: firebaseUser.uid });
         }
       } else {
+        log.info("User signed out or no session");
         setProfile(null);
+        setLoggerUserContext(undefined, undefined);
       }
       setLoading(false);
     });
 
-    // Handle redirect result (for mobile Safari fallback)
-    getRedirectResult(auth).catch(console.error);
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result) log.info("Redirect sign-in completed", { uid: result.user.uid });
+      })
+      .catch((err) => {
+        log.error("Redirect sign-in failed", err);
+      });
 
     return () => unsubscribe();
   }, []);
 
   const signInWithGoogle = useCallback(async () => {
+    const isMobile = isMobileSafari();
+    log.info("Google sign-in initiated", { method: isMobile ? "redirect" : "popup" });
     try {
-      if (isMobileSafari()) {
+      if (isMobile) {
         await signInWithRedirect(auth, googleProvider);
       } else {
         await signInWithPopup(auth, googleProvider);
       }
+      log.info("Google sign-in successful");
     } catch (error: any) {
       if (error.code === "auth/popup-blocked") {
+        log.warn("Popup blocked, falling back to redirect");
         await signInWithRedirect(auth, googleProvider);
       } else {
+        log.error("Google sign-in failed", error, { code: error.code });
         throw error;
       }
     }
   }, []);
 
   const signOut = useCallback(async () => {
+    log.info("Sign-out initiated");
     await firebaseSignOut(auth);
+    setLoggerUserContext(undefined, undefined);
+    log.info("Sign-out completed");
   }, []);
 
   return (

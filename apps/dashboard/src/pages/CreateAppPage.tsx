@@ -88,6 +88,9 @@ export function CreateAppPage() {
     setSaving(true);
     setError(null);
     try {
+      // Clean up empty string placeholders from arrays before saving
+      data.deletionInfo.stepsToDelete = data.deletionInfo.stepsToDelete.filter((s) => s.trim() !== "");
+      data.deletionInfo.dataDeleted = data.deletionInfo.dataDeleted.filter((s) => s.trim() !== "");
       await createApp(data);
       navigate("/");
     } catch (e: any) {
@@ -95,6 +98,27 @@ export function CreateAppPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function onSubmitError(fieldErrors: Record<string, any>) {
+    // Find which step contains the first error so user can fix it
+    const stepFieldMap: Record<number, string[]> = {
+      0: ["name", "slug", "shortDescription", "primaryColor", "defaultLanguage"],
+      1: ["platforms"],
+      2: ["publisher"],
+      3: ["dataPractices"],
+      4: ["supportInfo"],
+      5: ["deletionInfo", "useAppleStandardEula", "dataDeletionEnabled"],
+    };
+    for (let i = 0; i < STEPS.length - 1; i++) {
+      const fields = stepFieldMap[i] || [];
+      if (fields.some((f) => fieldErrors[f])) {
+        setStep(i);
+        setError(`Please fix the errors in "${STEPS[i]}" before creating.`);
+        return;
+      }
+    }
+    setError("Please fix the validation errors before creating.");
   }
 
   function nextStep() {
@@ -135,7 +159,7 @@ export function CreateAppPage() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit(onSubmit)}>
+      <form onSubmit={handleSubmit(onSubmit, onSubmitError)}>
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           {/* Step 0: Basics */}
           {step === 0 && (
@@ -433,6 +457,19 @@ export function CreateAppPage() {
               <div className="p-3 bg-yellow-50 rounded-lg text-sm text-yellow-800">
                 <strong>Disclaimer:</strong> Generated privacy policies, terms of use, and other legal pages are provided for informational purposes only and do not constitute legal advice. Review all content carefully and consult a qualified attorney.
               </div>
+              {Object.keys(errors).length > 0 && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  <strong>Validation errors detected.</strong> Please go back and fix the following sections:
+                  <ul className="list-disc ml-4 mt-1">
+                    {errors.name || errors.slug || errors.shortDescription || errors.primaryColor || errors.defaultLanguage ? <li>Basics</li> : null}
+                    {errors.platforms ? <li>Platforms</li> : null}
+                    {errors.publisher ? <li>Publisher</li> : null}
+                    {errors.dataPractices ? <li>Data Practices</li> : null}
+                    {errors.supportInfo ? <li>Support</li> : null}
+                    {errors.deletionInfo ? <li>Deletion</li> : null}
+                  </ul>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div><span className="text-gray-500">Name:</span> {watch("name")}</div>
                 <div><span className="text-gray-500">Slug:</span> /{watch("slug")}</div>

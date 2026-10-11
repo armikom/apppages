@@ -1,10 +1,14 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { createLogger } from "../lib/logger";
+
+const log = createLogger("LoginPage");
 
 export function LoginPage() {
   const { user, loading, signInWithGoogle } = useAuth();
 
   if (loading) {
+    log.debug("Login page loading auth state");
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
@@ -12,7 +16,21 @@ export function LoginPage() {
     );
   }
 
-  if (user) return <Navigate to="/" />;
+  if (user) {
+    log.info("Already authenticated, redirecting to dashboard", { uid: user.uid });
+    return <Navigate to="/" />;
+  }
+
+  log.debug("Rendering login page");
+
+  async function handleSignIn() {
+    log.info("User clicked Google sign-in button");
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      log.error("Sign-in failed from LoginPage", err);
+    }
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 to-blue-100">
@@ -26,7 +44,7 @@ export function LoginPage() {
 
         <div className="space-y-4">
           <button
-            onClick={signInWithGoogle}
+            onClick={handleSignIn}
             className="flex items-center justify-center gap-3 w-full px-4 py-3 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
           >
             <svg className="h-5 w-5" viewBox="0 0 24 24">

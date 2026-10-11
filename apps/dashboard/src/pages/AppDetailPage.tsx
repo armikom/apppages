@@ -2,6 +2,9 @@ import { useParams, Link } from "react-router-dom";
 import { useApps } from "../hooks/useApps";
 import { ExternalLink, Copy, Inbox, Trash2, Upload, Eye } from "lucide-react";
 import { useState } from "react";
+import { createLogger } from "../lib/logger";
+
+const log = createLogger("AppDetailPage");
 
 export function AppDetailPage() {
   const { appId } = useParams<{ appId: string }>();
@@ -11,7 +14,12 @@ export function AppDetailPage() {
   const app = apps.find((a) => a.id === appId);
 
   if (loading) return <div className="text-center py-12 text-gray-500">Loading...</div>;
-  if (!app) return <div className="text-center py-12 text-gray-500">App not found</div>;
+  if (!app) {
+    log.warn("App not found", { appId });
+    return <div className="text-center py-12 text-gray-500">App not found</div>;
+  }
+
+  log.debug("Rendering app detail", { appId, slug: app.slug, status: app.status });
 
   const baseUrl = window.location.origin;
   const publicBase = `${baseUrl}/p/${app.slug}`;
@@ -71,7 +79,10 @@ export function AppDetailPage() {
           </Link>
           {app.status === "draft" && (
             <button
-              onClick={() => publishApp(app.id)}
+              onClick={() => {
+                log.info("Publish button clicked", { appId: app.id, slug: app.slug });
+                publishApp(app.id);
+              }}
               className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700"
             >
               <Upload className="h-4 w-4" /> Publish

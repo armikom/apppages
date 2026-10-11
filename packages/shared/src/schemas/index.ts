@@ -72,8 +72,8 @@ export const supportInfoSchema = z.object({
 });
 
 export const deletionInfoSchema = z.object({
-  stepsToDelete: z.array(z.string().min(1).max(500)).min(1, "At least one step is required"),
-  dataDeleted: z.array(z.string().min(1)),
+  stepsToDelete: z.array(z.string().max(500)).transform((arr) => arr.filter((s) => s.trim() !== "")).pipe(z.array(z.string().min(1).max(500)).min(1, "At least one step is required")),
+  dataDeleted: z.array(z.string()).transform((arr) => arr.filter((s) => s.trim() !== "")).pipe(z.array(z.string().min(1))),
   dataRetained: z.array(z.object({
     type: z.string().min(1),
     period: z.string().min(1),
