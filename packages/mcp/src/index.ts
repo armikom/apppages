@@ -5,19 +5,25 @@
  *
  * Provides AI agents with tools to manage AppPages apps:
  * list, create, update, publish, delete apps; manage requests;
- * get public URLs and store links.
+ * get public URLs and store links; manage API keys.
  *
  * Transport: stdio (JSON-RPC over stdin/stdout)
- * Auth: Firebase Admin SDK with service account or ADC
+ *
+ * Auth (pick one):
+ *   1. APPPAGES_API_KEY — an API key stored in Firestore (recommended for agents)
+ *   2. ADC / GOOGLE_APPLICATION_CREDENTIALS — Firebase Admin SDK credentials
+ *      (requires APPPAGES_ACCOUNT_ID to identify the target account)
  */
 
+import { createHash, randomBytes } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { initializeApp, cert, type ServiceAccount } from "firebase-admin/app";
-import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
-// Initialize Firebase Admin
+// ─── Firebase Init ───
+
 const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 const projectId = process.env.FIREBASE_PROJECT_ID || "armikom-app-pages";
 
@@ -30,8 +36,57 @@ if (serviceAccountPath) {
 
 const db = getFirestore();
 
-// Default account — for single-user usage. Agents can override with accountId param.
-const DEFAULT_ACCOUNT_ID = process.env.APPPAGES_ACCOUNT_ID || "";
+// ─── API Key Auth ───
+
+const API_KEY_PREFIX = "apk_";
+const API_KEY_COLLECTION = "apiKeys";
+
+function hashKey(key: string): string {
+  return createHash("sha256").update(key).digest("hex");
+}
+
+function generateApiKey(): string {
+  return API_KEY_PREFIX + randomBytes(24).toString("hex");
+}
+
+interface ResolvedAuth {
+  accountId: string;
+  keyHash?: string;
+}
+
+let cachedAuth: ResolvedAuth | null = null;
+
+async function authenticateApiKey(apiKey: string): Promise<ResolvedAuth> {
+  const keyHash = hashKey(apiKey);
+  const doc = await db.doc(`${API_KEY_COLLECTION}/${keyHash}`).get();
+
+  if (!doc.exists) {
+    throw new Error("Invalid API key.");
+  }
+
+  const data = doc.data()!;
+  if (!data.active) {
+    throw new Error("API key has been revoked.");
+  }
+
+  // Update lastUsedAt (fire-and-forget)
+  doc.ref.update({ lastUsedAt: FieldValue.serverTimestamp() }).catch(() => {});
+
+  return { accountId: data.accountId, keyHash };
+}
+
+// Resolve auth on startup if API key is provided
+const envApiKey = process.env.APPPAGES_API_KEY;
+const envAccountId = process.env.APPPAGES_ACCOUNT_ID || "";
+
+if (envApiKey) {
+  try {
+    cachedAuth = await authenticateApiKey(envApiKey);
+  } catch (err: any) {
+    console.error(`[apppages-mcp] API key auth failed: ${err.message}`);
+    console.error("[apppages-mcp] Falling back to APPPAGES_ACCOUNT_ID if set.");
+  }
+}
 
 // Base URL for public pages
 const BASE_URL = process.env.APPPAGES_BASE_URL || "https://armikom-app-pages.web.app";
@@ -40,19 +95,25 @@ const BASE_URL = process.env.APPPAGES_BASE_URL || "https://armikom-app-pages.web
 
 const server = new McpServer({
   name: "apppages",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 // ─── Helper functions ───
 
 async function resolveAccountId(accountId?: string): Promise<string> {
-  const id = accountId || DEFAULT_ACCOUNT_ID;
-  if (!id) throw new Error("accountId is required. Set APPPAGES_ACCOUNT_ID env var or pass accountId parameter.");
-  return id;
+  if (accountId) return accountId;
+  if (cachedAuth?.accountId) return cachedAuth.accountId;
+  if (envAccountId) return envAccountId;
+  throw new Error(
+    "accountId is required. Authenticate with APPPAGES_API_KEY, set APPPAGES_ACCOUNT_ID, or pass accountId parameter."
+  );
 }
 
 async function getApps(accountId: string) {
-  const snap = await db.collection(`accounts/${accountId}/apps`).orderBy("updatedAt", "desc").get();
+  const snap = await db
+    .collection(`accounts/${accountId}/apps`)
+    .orderBy("updatedAt", "desc")
+    .get();
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
@@ -69,26 +130,39 @@ function formatDate(ts: any): string {
   return String(ts);
 }
 
-// ─── Tools ───
+// ─── App Tools ───
 
 server.tool(
   "list_apps",
   "List all apps in the account with their status, slug, and key info",
-  { accountId: z.string().optional().describe("Account ID (defaults to APPPAGES_ACCOUNT_ID env var)") },
+  {
+    accountId: z
+      .string()
+      .optional()
+      .describe("Account ID (auto-resolved from API key or APPPAGES_ACCOUNT_ID env var)"),
+  },
   async ({ accountId }) => {
     const acctId = await resolveAccountId(accountId);
     const apps = await getApps(acctId);
 
     if (apps.length === 0) {
-      return { content: [{ type: "text", text: "No apps found in this account." }] };
+      return {
+        content: [{ type: "text", text: "No apps found in this account." }],
+      };
     }
 
-    const lines = apps.map((a: any) =>
-      `• ${a.name} (/${a.slug}) — status: ${a.status}, id: ${a.id}, updated: ${formatDate(a.updatedAt)}`
+    const lines = apps.map(
+      (a: any) =>
+        `• ${a.name} (/${a.slug}) — status: ${a.status}, id: ${a.id}, updated: ${formatDate(a.updatedAt)}`
     );
 
     return {
-      content: [{ type: "text", text: `Found ${apps.length} app(s):\n\n${lines.join("\n")}` }],
+      content: [
+        {
+          type: "text",
+          text: `Found ${apps.length} app(s):\n\n${lines.join("\n")}`,
+        },
+      ],
     };
   }
 );
@@ -114,13 +188,23 @@ server.tool(
   "Create a new app with basic info. Returns the new app ID. The app starts as a draft.",
   {
     name: z.string().describe("App display name"),
-    slug: z.string().describe("URL slug (lowercase, hyphens, 3-60 chars, globally unique)"),
+    slug: z
+      .string()
+      .describe("URL slug (lowercase, hyphens, 3-60 chars, globally unique)"),
     shortDescription: z.string().describe("Short description of the app"),
-    primaryColor: z.string().default("#3b82f6").describe("Hex color code (e.g. #3b82f6)"),
+    primaryColor: z
+      .string()
+      .default("#3b82f6")
+      .describe("Hex color code (e.g. #3b82f6)"),
     defaultLanguage: z.enum(["en", "tr"]).default("en"),
-    packageName: z.string().optional().describe("Android package name (e.g. com.example.app)"),
+    packageName: z
+      .string()
+      .optional()
+      .describe("Android package name (e.g. com.example.app)"),
     bundleId: z.string().optional().describe("iOS bundle ID"),
-    publisherName: z.string().describe("Legal entity name of the publisher/developer"),
+    publisherName: z
+      .string()
+      .describe("Legal entity name of the publisher/developer"),
     publisherType: z.enum(["individual", "company"]).default("individual"),
     country: z.string().describe("Publisher country"),
     contactEmail: z.string().email().describe("Contact email"),
@@ -130,10 +214,17 @@ server.tool(
   async (params) => {
     const acctId = await resolveAccountId(params.accountId);
 
-    // Check slug availability
     const slugDoc = await db.doc(`slugs/${params.slug}`).get();
     if (slugDoc.exists) {
-      return { content: [{ type: "text", text: `Error: Slug "${params.slug}" is already taken.` }], isError: true };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error: Slug "${params.slug}" is already taken.`,
+          },
+        ],
+        isError: true,
+      };
     }
 
     const appRef = db.collection(`accounts/${acctId}/apps`).doc();
@@ -147,8 +238,23 @@ server.tool(
       defaultLanguage: params.defaultLanguage,
       additionalLanguages: [],
       platforms: {
-        ...(params.packageName ? { android: { packageName: params.packageName, playStoreUrl: "" } } : {}),
-        ...(params.bundleId ? { ios: { bundleId: params.bundleId, appStoreUrl: "", appStoreId: "" } } : {}),
+        ...(params.packageName
+          ? {
+              android: {
+                packageName: params.packageName,
+                playStoreUrl: "",
+              },
+            }
+          : {}),
+        ...(params.bundleId
+          ? {
+              ios: {
+                bundleId: params.bundleId,
+                appStoreUrl: "",
+                appStoreId: "",
+              },
+            }
+          : {}),
       },
       publisher: {
         legalEntityName: params.publisherName,
@@ -178,7 +284,12 @@ server.tool(
         supportFormEnabled: true,
       },
       deletionInfo: {
-        stepsToDelete: ["Open the app", "Go to Settings", "Tap Delete Account", "Confirm deletion"],
+        stepsToDelete: [
+          "Open the app",
+          "Go to Settings",
+          "Tap Delete Account",
+          "Confirm deletion",
+        ],
         dataDeleted: ["User profile", "App data"],
         dataRetained: [],
         webFormEnabled: true,
@@ -193,18 +304,26 @@ server.tool(
       updatedAt: FieldValue.serverTimestamp(),
     };
 
-    // Transaction: reserve slug + create app
     await db.runTransaction(async (tx) => {
       const slugRef = db.doc(`slugs/${params.slug}`);
       const slugSnap = await tx.get(slugRef);
       if (slugSnap.exists) throw new Error(`Slug "${params.slug}" is already taken`);
 
-      tx.set(slugRef, { accountId: acctId, appId: appRef.id, createdAt: FieldValue.serverTimestamp() });
+      tx.set(slugRef, {
+        accountId: acctId,
+        appId: appRef.id,
+        createdAt: FieldValue.serverTimestamp(),
+      });
       tx.set(appRef, appData);
     });
 
     return {
-      content: [{ type: "text", text: `App created successfully!\n\nID: ${appRef.id}\nSlug: /${params.slug}\nStatus: draft\n\nUse publish_app to make it live.` }],
+      content: [
+        {
+          type: "text",
+          text: `App created successfully!\n\nID: ${appRef.id}\nSlug: /${params.slug}\nStatus: draft\n\nUse publish_app to make it live.`,
+        },
+      ],
     };
   }
 );
@@ -214,7 +333,11 @@ server.tool(
   "Update app fields. Pass only the fields you want to change as a JSON object.",
   {
     appId: z.string().describe("The app document ID"),
-    updates: z.record(z.any()).describe("JSON object of fields to update (e.g. {\"name\": \"New Name\", \"shortDescription\": \"...\"}). Supports nested paths via dot notation."),
+    updates: z
+      .record(z.any())
+      .describe(
+        'JSON object of fields to update (e.g. {"name": "New Name", "shortDescription": "..."}). Supports nested paths via dot notation.'
+      ),
     accountId: z.string().optional(),
   },
   async ({ appId, updates, accountId }) => {
@@ -223,7 +346,9 @@ server.tool(
       ...updates,
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return { content: [{ type: "text", text: `App ${appId} updated successfully.` }] };
+    return {
+      content: [{ type: "text", text: `App ${appId} updated successfully.` }],
+    };
   }
 );
 
@@ -240,7 +365,14 @@ server.tool(
       status: "published",
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return { content: [{ type: "text", text: `App ${appId} published! The onAppWrite trigger will create a version snapshot.\n\nPublic pages are now live.` }] };
+    return {
+      content: [
+        {
+          type: "text",
+          text: `App ${appId} published! The onAppWrite trigger will create a version snapshot.\n\nPublic pages are now live.`,
+        },
+      ],
+    };
   }
 );
 
@@ -255,7 +387,10 @@ server.tool(
     const acctId = await resolveAccountId(accountId);
     const appDoc = await db.doc(`accounts/${acctId}/apps/${appId}`).get();
     if (!appDoc.exists) {
-      return { content: [{ type: "text", text: `App ${appId} not found.` }], isError: true };
+      return {
+        content: [{ type: "text", text: `App ${appId} not found.` }],
+        isError: true,
+      };
     }
 
     const slug = appDoc.data()?.slug;
@@ -263,23 +398,37 @@ server.tool(
     if (slug) {
       await db.doc(`slugs/${slug}`).delete();
     }
-    return { content: [{ type: "text", text: `App ${appId} (/${slug}) deleted and slug released.` }] };
+    return {
+      content: [
+        {
+          type: "text",
+          text: `App ${appId} (/${slug}) deleted and slug released.`,
+        },
+      ],
+    };
   }
 );
+
+// ─── Request Tools ───
 
 server.tool(
   "list_requests",
   "List deletion and support requests for an app, with status and requester info",
   {
     appId: z.string().describe("The app document ID"),
-    status: z.enum(["pending_confirmation", "new", "in_progress", "done", "rejected"]).optional().describe("Filter by status"),
+    status: z
+      .enum(["pending_confirmation", "new", "in_progress", "done", "rejected"])
+      .optional()
+      .describe("Filter by status"),
     accountId: z.string().optional(),
   },
   async ({ appId, status, accountId }) => {
     const acctId = await resolveAccountId(accountId);
-    let query = db.collection(`accounts/${acctId}/apps/${appId}/requests`).orderBy("createdAt", "desc");
+    const snap = await db
+      .collection(`accounts/${acctId}/apps/${appId}/requests`)
+      .orderBy("createdAt", "desc")
+      .get();
 
-    const snap = await query.get();
     let requests = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
     if (status) {
@@ -290,12 +439,18 @@ server.tool(
       return { content: [{ type: "text", text: "No requests found." }] };
     }
 
-    const lines = requests.map((r: any) =>
-      `• [${r.status}] ${r.type} from ${r.email}${r.username ? ` (${r.username})` : ""} — ${formatDate(r.createdAt)} — id: ${r.id}`
+    const lines = requests.map(
+      (r: any) =>
+        `• [${r.status}] ${r.type} from ${r.email}${r.username ? ` (${r.username})` : ""} — ${formatDate(r.createdAt)} — id: ${r.id}`
     );
 
     return {
-      content: [{ type: "text", text: `Found ${requests.length} request(s):\n\n${lines.join("\n")}` }],
+      content: [
+        {
+          type: "text",
+          text: `Found ${requests.length} request(s):\n\n${lines.join("\n")}`,
+        },
+      ],
     };
   }
 );
@@ -306,7 +461,9 @@ server.tool(
   {
     appId: z.string().describe("The app document ID"),
     requestId: z.string().describe("The request document ID"),
-    status: z.enum(["new", "in_progress", "done", "rejected"]).describe("New status"),
+    status: z
+      .enum(["new", "in_progress", "done", "rejected"])
+      .describe("New status"),
     notes: z.string().optional().describe("Internal notes"),
     accountId: z.string().optional(),
   },
@@ -320,10 +477,21 @@ server.tool(
     if (status === "done" || status === "rejected") {
       updates.resolvedAt = FieldValue.serverTimestamp();
     }
-    await db.doc(`accounts/${acctId}/apps/${appId}/requests/${requestId}`).update(updates);
-    return { content: [{ type: "text", text: `Request ${requestId} updated to status: ${status}` }] };
+    await db
+      .doc(`accounts/${acctId}/apps/${appId}/requests/${requestId}`)
+      .update(updates);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Request ${requestId} updated to status: ${status}`,
+        },
+      ],
+    };
   }
 );
+
+// ─── URL Tools ───
 
 server.tool(
   "get_public_urls",
@@ -349,10 +517,12 @@ server.tool(
     urls.push(`Version History: ${BASE_URL}/p/${app.slug}/privacy/history`);
 
     return {
-      content: [{
-        type: "text",
-        text: `Public URLs for "${app.name}" (status: ${app.status}):\n\n${urls.join("\n")}`,
-      }],
+      content: [
+        {
+          type: "text",
+          text: `Public URLs for "${app.name}" (status: ${app.status}):\n\n${urls.join("\n")}`,
+        },
+      ],
     };
   }
 );
@@ -376,16 +546,211 @@ server.tool(
     lines.push(`Marketing URL:       ${BASE_URL}/p/${app.slug}`);
     lines.push("");
     lines.push("═══ Google Play Console ═══");
-    lines.push(`Privacy policy:              ${BASE_URL}/p/${app.slug}/privacy`);
-    lines.push(`Account deletion URL:        ${BASE_URL}/p/${app.slug}/delete-account`);
+    lines.push(
+      `Privacy policy:              ${BASE_URL}/p/${app.slug}/privacy`
+    );
+    lines.push(
+      `Account deletion URL:        ${BASE_URL}/p/${app.slug}/delete-account`
+    );
     if (app.dataDeletionEnabled) {
-      lines.push(`Data deletion URL:           ${BASE_URL}/p/${app.slug}/delete-data`);
+      lines.push(
+        `Data deletion URL:           ${BASE_URL}/p/${app.slug}/delete-data`
+      );
     }
-    lines.push(`Support email:               ${app.publisher?.supportEmail || "N/A"}`);
-    lines.push(`Website:                     ${app.publisher?.website || BASE_URL + "/p/" + app.slug}`);
+    lines.push(
+      `Support email:               ${app.publisher?.supportEmail || "N/A"}`
+    );
+    lines.push(
+      `Website:                     ${app.publisher?.website || BASE_URL + "/p/" + app.slug}`
+    );
 
     return {
-      content: [{ type: "text", text: `Store links for "${app.name}":\n\n${lines.join("\n")}` }],
+      content: [
+        {
+          type: "text",
+          text: `Store links for "${app.name}":\n\n${lines.join("\n")}`,
+        },
+      ],
+    };
+  }
+);
+
+// ─── API Key Management Tools ───
+
+server.tool(
+  "create_api_key",
+  "Create a new API key for agent/programmatic access. Returns the full key (shown only once). The key is bound to an account and can optionally be scoped to specific tools.",
+  {
+    label: z
+      .string()
+      .describe(
+        'Human-readable label for this key (e.g. "CI pipeline", "Cursor agent")'
+      ),
+    scopes: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Array of tool names this key is allowed to call (empty or omitted = all tools). Example: [\"list_apps\", \"get_app\", \"get_public_urls\"]"
+      ),
+    accountId: z.string().optional().describe("Account ID to bind the key to"),
+    uid: z
+      .string()
+      .optional()
+      .describe("User ID who owns this key (for audit trail)"),
+  },
+  async ({ label, scopes, accountId, uid }) => {
+    const acctId = await resolveAccountId(accountId);
+    const rawKey = generateApiKey();
+    const keyHash = hashKey(rawKey);
+
+    const keyDoc = {
+      prefix: rawKey.substring(0, 12) + "...",
+      accountId: acctId,
+      uid: uid || "mcp",
+      label,
+      active: true,
+      scopes: scopes || [],
+      createdAt: FieldValue.serverTimestamp(),
+      lastUsedAt: null,
+    };
+
+    await db.doc(`${API_KEY_COLLECTION}/${keyHash}`).set(keyDoc);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: [
+            "API key created successfully!",
+            "",
+            `Label:      ${label}`,
+            `Account:    ${acctId}`,
+            `Scopes:     ${scopes?.length ? scopes.join(", ") : "all (unrestricted)"}`,
+            "",
+            "╔══════════════════════════════════════════════════════════════╗",
+            `║  ${rawKey}  ║`,
+            "╚══════════════════════════════════════════════════════════════╝",
+            "",
+            "⚠️  Copy this key now — it cannot be retrieved later.",
+            "",
+            "Usage in ~/.cursor/mcp.json:",
+            JSON.stringify(
+              {
+                apppages: {
+                  type: "stdio",
+                  command: "node",
+                  args: [".../packages/mcp/dist/index.js"],
+                  env: {
+                    APPPAGES_API_KEY: rawKey,
+                  },
+                },
+              },
+              null,
+              2
+            ),
+          ].join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+server.tool(
+  "list_api_keys",
+  "List all API keys for the account (shows prefix, label, status, scopes — never the full key)",
+  {
+    accountId: z.string().optional().describe("Account ID"),
+    includeRevoked: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("Include revoked (inactive) keys"),
+  },
+  async ({ accountId, includeRevoked }) => {
+    const acctId = await resolveAccountId(accountId);
+
+    let query = db
+      .collection(API_KEY_COLLECTION)
+      .where("accountId", "==", acctId);
+
+    const snap = await query.get();
+    let keys = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    if (!includeRevoked) {
+      keys = keys.filter((k: any) => k.active);
+    }
+
+    if (keys.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "No API keys found. Use create_api_key to create one.",
+          },
+        ],
+      };
+    }
+
+    const lines = keys.map((k: any) => {
+      const scopeStr = k.scopes?.length
+        ? `scopes: [${k.scopes.join(", ")}]`
+        : "scopes: all";
+      const statusStr = k.active ? "✅ active" : "❌ revoked";
+      const lastUsed = k.lastUsedAt
+        ? `last used: ${formatDate(k.lastUsedAt)}`
+        : "never used";
+      return `• ${k.prefix} — "${k.label}" — ${statusStr} — ${scopeStr} — ${lastUsed} — hash: ${k.id}`;
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Found ${keys.length} API key(s):\n\n${lines.join("\n")}`,
+        },
+      ],
+    };
+  }
+);
+
+server.tool(
+  "revoke_api_key",
+  "Revoke an API key. The key will no longer work for authentication. This is irreversible.",
+  {
+    keyHash: z
+      .string()
+      .describe(
+        "The key hash (document ID) from list_api_keys output"
+      ),
+  },
+  async ({ keyHash }) => {
+    const doc = await db.doc(`${API_KEY_COLLECTION}/${keyHash}`).get();
+    if (!doc.exists) {
+      return {
+        content: [{ type: "text", text: "API key not found." }],
+        isError: true,
+      };
+    }
+
+    const data = doc.data()!;
+    if (!data.active) {
+      return {
+        content: [{ type: "text", text: "API key is already revoked." }],
+      };
+    }
+
+    await doc.ref.update({
+      active: false,
+      revokedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `API key "${data.label}" (${data.prefix}) has been revoked.`,
+        },
+      ],
     };
   }
 );

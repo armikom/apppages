@@ -457,11 +457,44 @@ An MCP (Model Context Protocol) server enables AI agents to programmatically man
 | `update_request` | Update request status (new → in_progress → done/rejected) |
 | `get_public_urls` | Get all public page URLs for an app |
 | `get_store_links` | Get copy-paste URLs for App Store Connect / Google Play Console |
+| `create_api_key` | Create an API key for programmatic access (returns key once) |
+| `list_api_keys` | List API keys for the account (prefix + label, never full key) |
+| `revoke_api_key` | Permanently revoke an API key |
 
-### Configuration
+### Authentication
+
+The MCP server supports two auth modes:
+
+#### 1. API Key (recommended for agents)
+
+API keys are stored in Firestore (`apiKeys/{sha256Hash}`) and bound to an account. The agent only needs the key — no ADC, no account ID.
 
 ```json
-// ~/.cursor/mcp.json
+{
+  "apppages": {
+    "type": "stdio",
+    "command": "node",
+    "args": ["/path/to/apppages/packages/mcp/dist/index.js"],
+    "env": {
+      "APPPAGES_API_KEY": "apk_a1b2c3d4..."
+    }
+  }
+}
+```
+
+**Creating a key:** Use the `create_api_key` tool (requires ADC or an existing key first), or create one manually in Firestore.
+
+**Key format:** `apk_` prefix + 48 hex chars (24 random bytes). Stored as SHA-256 hash in Firestore — the raw key is shown only once at creation time.
+
+**Scoping:** Keys can optionally be scoped to specific tools (e.g., `["list_apps", "get_app", "get_public_urls"]`). An empty scopes array means all tools are allowed.
+
+**Revoking:** Use `revoke_api_key` with the key hash from `list_api_keys`. Revocation is irreversible.
+
+#### 2. ADC / Service Account (admin mode)
+
+For initial setup or admin operations, authenticate via Firebase Admin SDK:
+
+```json
 {
   "apppages": {
     "type": "stdio",
@@ -469,18 +502,33 @@ An MCP (Model Context Protocol) server enables AI agents to programmatically man
     "args": ["/path/to/apppages/packages/mcp/dist/index.js"],
     "env": {
       "FIREBASE_PROJECT_ID": "armikom-app-pages",
-      "APPPAGES_ACCOUNT_ID": "<optional-default-account-id>",
-      "APPPAGES_BASE_URL": "https://armikom-app-pages.web.app"
+      "APPPAGES_ACCOUNT_ID": "<account-id>"
     }
   }
 }
 ```
 
-### Auth
+Uses `GOOGLE_APPLICATION_CREDENTIALS` (path to service account JSON) or Application Default Credentials (`gcloud auth application-default login`).
 
-The MCP server uses Firebase Admin SDK. It authenticates via:
-1. `GOOGLE_APPLICATION_CREDENTIALS` env var (path to service account JSON), or
-2. Application Default Credentials (ADC) — works when `gcloud auth application-default login` is active
+### API Key Data Model
+
+```
+apiKeys/{sha256Hash}
+├── prefix: string        # "apk_a1b2c3d4..." (first 12 chars + "...")
+├── accountId: string     # Account this key grants access to
+├── uid: string           # User who created the key
+├── label: string         # Human-readable label
+├── active: boolean       # false = revoked
+├── scopes: string[]      # Allowed tools (empty = all)
+├── createdAt: Timestamp
+├── lastUsedAt: Timestamp | null
+└── revokedAt?: Timestamp # Set when revoked
+```
+
+**Security:**
+- Raw keys are never stored — only SHA-256 hashes
+- Firestore rules: account owners can read/create keys for their account; only admins can update/delete
+- `lastUsedAt` is updated on each successful authentication
 
 ### Build
 

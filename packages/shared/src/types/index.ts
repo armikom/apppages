@@ -229,6 +229,26 @@ export const RESERVED_SLUGS = new Set([
   "public",
 ]);
 
+/** API key for MCP / programmatic access */
+export interface ApiKey {
+  /** SHA-256 hash of the actual key (used as document ID) */
+  id: string;
+  /** First 8 chars of the key for display (e.g. "apk_a1b2...") */
+  prefix: string;
+  /** Account this key grants access to */
+  accountId: string;
+  /** User who created the key */
+  uid: string;
+  /** Human-readable label */
+  label: string;
+  /** Whether the key is active */
+  active: boolean;
+  /** Allowed tool names (empty array = all tools allowed) */
+  scopes: string[];
+  createdAt: Date;
+  lastUsedAt: Date | null;
+}
+
 /** Known third-party SDKs with their policy URLs */
 export const KNOWN_SDKS: ThirdPartySdk[] = [
   { name: "Firebase Analytics", policyUrl: "https://firebase.google.com/support/privacy", dataCollected: ["analytics", "device_ids"] },

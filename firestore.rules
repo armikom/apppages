@@ -80,6 +80,26 @@ service cloud.firestore {
       allow delete: if isAccountOwner(accountId);
     }
 
+    // API keys (MCP / programmatic access)
+    // Read: account owners can list their own keys; Admin can see all
+    // Create: account owners only; Delete/Update: admin only
+    // Full key is never stored — only a SHA-256 hash (as the doc ID)
+    match /apiKeys/{keyHash} {
+      allow read: if isAuth() && (
+        isAdmin() ||
+        (resource.data.accountId is string &&
+         isAccountOwner(resource.data.accountId))
+      );
+      allow create: if isAuth() && (
+        isAdmin() ||
+        (request.resource.data.accountId is string &&
+         isAccountOwner(request.resource.data.accountId) &&
+         request.resource.data.uid == request.auth.uid)
+      );
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
     // Admin: abuse reports
     match /abuseReports/{reportId} {
       allow read: if isAdmin();

@@ -213,7 +213,7 @@ VITE_USE_EMULATORS=false  # set to true for local dev
 
 ## MCP Server (`packages/mcp`)
 
-AI agents can manage AppPages via the MCP server (stdio transport). Tools: `list_apps`, `get_app`, `create_app`, `update_app`, `publish_app`, `delete_app`, `list_requests`, `update_request`, `get_public_urls`, `get_store_links`.
+AI agents can manage AppPages via the MCP server (stdio transport). Tools: `list_apps`, `get_app`, `create_app`, `update_app`, `publish_app`, `delete_app`, `list_requests`, `update_request`, `get_public_urls`, `get_store_links`, `create_api_key`, `list_api_keys`, `revoke_api_key`.
 
 ```json
 // ~/.cursor/mcp.json
@@ -222,13 +222,18 @@ AI agents can manage AppPages via the MCP server (stdio transport). Tools: `list
     "type": "stdio",
     "command": "node",
     "args": ["/Users/devops/Documents/source/Armikom/apppages/packages/mcp/dist/index.js"],
-    "env": { "FIREBASE_PROJECT_ID": "armikom-app-pages" }
+    "env": { "APPPAGES_API_KEY": "apk_..." }
   }
 }
 ```
 
 Build: `pnpm --filter @apppages/mcp build`
-Auth: Uses ADC (`gcloud auth application-default login`) or `GOOGLE_APPLICATION_CREDENTIALS`.
+
+Auth (pick one):
+1. **API key** (recommended): Set `APPPAGES_API_KEY` env var. Key format: `apk_<48-hex-chars>`. Creates via `create_api_key` tool. Key auto-resolves account — no `APPPAGES_ACCOUNT_ID` needed.
+2. **ADC / service account**: Uses `gcloud auth application-default login` or `GOOGLE_APPLICATION_CREDENTIALS`. Requires `APPPAGES_ACCOUNT_ID` to identify target account.
+
+API keys stored in Firestore `apiKeys/{sha256Hash}` — raw key never stored, only shown once at creation.
 
 ## Out of Scope for v1
 - Payments / billing (plan field exists, no Stripe integration)
